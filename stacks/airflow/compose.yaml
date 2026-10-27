@@ -1,0 +1,21 @@
+name: myscoutee-bigdata-airflow
+
+services:
+  airflow:
+    image: apache/airflow:3.1.7
+    command: standalone
+    restart: "no"
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    ports:
+      - "127.0.0.1:8096:8080"
+    volumes:
+      - airflow-data:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - ../../build/stations:/opt/lab:ro
+    mem_limit: 4g
+
+volumes:
+  airflow-data:

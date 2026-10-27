@@ -1,0 +1,68 @@
+name: myscoutee-bigdata-hadoop
+
+x-hadoop: &hadoop
+  image: apache/hadoop:3.4.2-lean
+  env_file: ./config.env
+  restart: "no"
+
+services:
+  init:
+    image: apache/hadoop:3.4.2-lean
+    user: root
+    env_file: ./config.env
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - mkdir -p /tmp/hadoop-root/dfs/name /tmp/hadoop-root/dfs/data && if [ ! -f /tmp/hadoop-root/dfs/name/current/VERSION ]; then hdfs namenode -format -nonInteractive; fi && chown -R 1000:100 /tmp/hadoop-root/dfs/name /tmp/hadoop-root/dfs/data
+    volumes:
+      - namenode-data:/tmp/hadoop-root/dfs/name
+      - datanode-data:/tmp/hadoop-root/dfs/data
+    restart: "no"
+
+  namenode:
+    <<: *hadoop
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    environment:
+      ENSURE_NAMENODE_DIR: /tmp/hadoop-root/dfs/name
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:9871:9870"
+    volumes:
+      - namenode-data:/tmp/hadoop-root/dfs/name
+      - ../../build/stations:/opt/lab:ro
+    mem_limit: 1g
+
+  datanode:
+    <<: *hadoop
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      namenode:
+        condition: service_started
+    volumes:
+      - datanode-data:/tmp/hadoop-root/dfs/data
+    mem_limit: 1g
+
+  resourcemanager:
+    <<: *hadoop
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    depends_on: [namenode]
+    ports:
+      - "127.0.0.1:8089:8088"
+    mem_limit: 1g
+
+  nodemanager:
+    <<: *hadoop
+    hostname: nodemanager
+    command: ["yarn", "nodemanager"]
+    depends_on: [resourcemanager, datanode]
+    mem_limit: 2g
+
+volumes:
+  namenode-data:
+  datanode-data:

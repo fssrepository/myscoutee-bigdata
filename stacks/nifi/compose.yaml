@@ -1,0 +1,24 @@
+name: myscoutee-bigdata-nifi
+
+services:
+  nifi:
+    image: apache/nifi:2.12.0
+    hostname: nifi
+    restart: "no"
+    environment:
+      SINGLE_USER_CREDENTIALS_USERNAME: labuser
+      SINGLE_USER_CREDENTIALS_PASSWORD: lab-only-password-123
+      NIFI_WEB_HTTPS_HOST: 0.0.0.0
+      NIFI_WEB_PROXY_HOST: localhost:8444
+      NIFI_JVM_HEAP_INIT: 512m
+      NIFI_JVM_HEAP_MAX: 1536m
+    ports:
+      - "127.0.0.1:8444:8443"
+    volumes:
+      - nifi-state:/opt/nifi/nifi-current/state
+      - ../../build/stations/nifi-inbox:/opt/lab/inbox
+      - ../../build/stations/nifi-output:/opt/lab/output
+    mem_limit: 3g
+
+volumes:
+  nifi-state:

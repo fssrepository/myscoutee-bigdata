@@ -1,0 +1,21 @@
+name: myscoutee-bigdata-hive
+
+services:
+  hive:
+    image: apache/hive:4.0.0
+    hostname: hive
+    restart: "no"
+    environment:
+      SERVICE_NAME: hiveserver2
+      HIVE_SERVER2_THRIFT_BIND_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:10002:10002"
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - hive-warehouse:/opt/hive/data/warehouse
+      - ../../build/stations:/opt/lab:ro
+      - ./activity.hql:/opt/lab-sql/activity.hql:ro
+    mem_limit: 3g
+
+volumes:
+  hive-warehouse:

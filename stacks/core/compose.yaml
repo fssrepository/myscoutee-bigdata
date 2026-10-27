@@ -1,0 +1,273 @@
+name: myscoutee-bigdata
+
+services:
+  kafka:
+    image: apache/kafka:4.1.2
+    restart: "no"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LOG_RETENTION_HOURS: 168
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 20s
+    mem_limit: 1g
+
+  topic:
+    image: apache/kafka:4.1.2
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-ec"]
+    command: ["for topic in myscoutee.activity.v1 myscoutee.affinity.tasks.v1 myscoutee.affinity.rollups.v1; do /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1; done"]
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:8.1.6
+    profiles: [schema]
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "127.0.0.1:8085:8081"
+    mem_limit: 768m
+
+  schema-demo:
+    build: ../../producer
+    profiles: [schema]
+    restart: "no"
+    depends_on:
+      schema-registry:
+        condition: service_started
+    entrypoint: ["python", "schema_demo.py"]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: myscoutee.activity.avro.v1
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.10.7.6
+    restart: "no"
+    depends_on:
+      topic:
+        condition: service_completed_successfully
+    environment:
+      CLICKHOUSE_DB: myscoutee_lab
+      CLICKHOUSE_USER: lab
+      CLICKHOUSE_PASSWORD: lab-only
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "127.0.0.1:8126:8123"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user lab --password lab-only --query 'SELECT 1' >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    mem_limit: 2g
+
+  lake:
+    image: chrislusf/seaweedfs:4.51
+    restart: "no"
+    command: ["mini", "-dir=/data", "-ip.bind=0.0.0.0"]
+    environment:
+      AWS_ACCESS_KEY_ID: lab
+      AWS_SECRET_ACCESS_KEY: lab-only-secret
+      S3_BUCKET: myscoutee-lake
+    ports:
+      - "127.0.0.1:8333:8333"
+      - "127.0.0.1:8888:8888"
+    volumes:
+      - lake-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8333/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    mem_limit: 1g
+
+  dashboard:
+    build: ./dashboard
+    restart: "no"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: lab
+      CLICKHOUSE_PASSWORD: lab-only
+    ports:
+      - "127.0.0.1:8094:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 128m
+
+  producer:
+    build: ../../producer
+    profiles: [tools]
+    depends_on:
+      topic:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: myscoutee.activity.v1
+    restart: "no"
+
+  affinity-producer:
+    build: ../../producer
+    profiles: [stream]
+    depends_on:
+      topic:
+        condition: service_completed_successfully
+    entrypoint: ["python", "affinity.py"]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: myscoutee.affinity.tasks.v1
+    restart: "no"
+
+  flink-jobmanager:
+    build: ./flink
+    profiles: [stream]
+    command: jobmanager
+    depends_on:
+      topic:
+        condition: service_completed_successfully
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+        execution.checkpointing.interval: 10s
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    mem_limit: 1g
+    restart: "no"
+
+  flink-taskmanager:
+    build: ./flink
+    profiles: [stream]
+    command: taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        parallelism.default: 1
+        taskmanager.numberOfTaskSlots: 2
+        execution.checkpointing.interval: 10s
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    mem_limit: 2g
+    restart: "no"
+
+  flink-submit:
+    build: ./flink
+    profiles: [stream]
+    command: ["bin/sql-client.sh", "-f", "/opt/flink/sql/affinity.sql"]
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        rest.address: flink-jobmanager
+        parallelism.default: 1
+        execution.checkpointing.interval: 10s
+    volumes:
+      - ./flink/affinity.sql:/opt/flink/sql/affinity.sql:ro
+    restart: "no"
+
+  spark:
+    build:
+      context: ./spark
+      args:
+        LAB_UID: ${LAB_UID:-1000}
+        LAB_GID: ${LAB_GID:-1000}
+    profiles: [batch]
+    depends_on:
+      topic:
+        condition: service_completed_successfully
+      lake:
+        condition: service_healthy
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command:
+      - --master
+      - local[*]
+      - --conf
+      - spark.jars.ivy=/workspace/build/ivy
+      - --conf
+      - spark.eventLog.enabled=true
+      - --conf
+      - spark.eventLog.dir=file:/workspace/build/spark-events
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.4,org.apache.hadoop:hadoop-aws:3.4.1
+      - /workspace/spark_batch.py
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: myscoutee.activity.v1
+      SPARK_LOCAL_IP: 127.0.0.1
+      HOME: /home/lab
+      AWS_ACCESS_KEY_ID: lab
+      AWS_SECRET_ACCESS_KEY: lab-only-secret
+    volumes:
+      - ./spark_batch.py:/workspace/spark_batch.py:ro
+      - ../../build:/workspace/build
+    restart: "no"
+    mem_limit: 3g
+
+  spark-history:
+    build:
+      context: ./spark
+      args:
+        LAB_UID: ${LAB_UID:-1000}
+        LAB_GID: ${LAB_GID:-1000}
+    profiles: [history]
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command: ["org.apache.spark.deploy.history.HistoryServer"]
+    environment:
+      SPARK_DAEMON_MEMORY: 512m
+      SPARK_HISTORY_OPTS: -Dspark.history.fs.logDirectory=file:/workspace/build/spark-events
+    ports:
+      - "127.0.0.1:18080:18080"
+    volumes:
+      - ../../build/spark-events:/workspace/build/spark-events:ro
+    restart: "no"
+    mem_limit: 768m
+
+volumes:
+  kafka-data:
+  clickhouse-data:
+  flink-checkpoints:
+  lake-data:

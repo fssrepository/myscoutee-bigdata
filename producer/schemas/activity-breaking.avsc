@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "ActivitySignal",
+  "namespace": "myscoutee.lab",
+  "fields": [
+    {"name": "event_id", "type": "long"},
+    {"name": "occurred_at", "type": "string"},
+    {"name": "event_key", "type": "string"},
+    {"name": "group_id", "type": "string"},
+    {"name": "city", "type": "string"},
+    {"name": "mode", "type": "string"},
+    {"name": "source", "type": ["null", "string"], "default": null}
+  ]
+}

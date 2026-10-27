@@ -1,0 +1,24 @@
+name: myscoutee-bigdata-cassandra
+
+services:
+  cassandra:
+    image: cassandra:5.0.9
+    hostname: cassandra
+    restart: "no"
+    environment:
+      CASSANDRA_CLUSTER_NAME: MyScoutee Lab
+      MAX_HEAP_SIZE: 768M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ../../build/stations:/opt/lab:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 15s
+      retries: 24
+      start_period: 45s
+    mem_limit: 2g
+
+volumes:
+  cassandra-data:

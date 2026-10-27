@@ -1,0 +1,16 @@
+name: myscoutee-bigdata-hbase
+
+services:
+  hbase:
+    build: .
+    hostname: hbase
+    restart: "no"
+    ports:
+      - "127.0.0.1:16011:16010"
+    volumes:
+      - hbase-data:/var/lib/hbase
+      - ../../build/stations:/opt/lab:ro
+    mem_limit: 2g
+
+volumes:
+  hbase-data:
